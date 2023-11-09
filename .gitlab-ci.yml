@@ -1,0 +1,57 @@
+stages:
+  - Static Analysis
+  - Test
+  - Release
+  - Deploy
+
+eslint:           # ESLint job configuration
+  stage: Static Analysis     # Define a new stage for linting
+  image: node:latest  # Node.js image for running ESLint
+  script:
+    - npx eslint ./*.js
+  artifacts:
+    when: on_failure
+    paths:
+      - eslint_report.txt
+
+unit_test:
+  stage: Test
+  image: node:latest
+  script:
+    - npm install  # Install dependencies (if any)
+    - npm test  # Execute your unit tests here
+  artifacts:
+    when: on_failure
+    paths:
+      - eslint_report.txt
+
+# based on: https://gitlab.com/gitlab-org/gitlab/-/blob/master/lib/gitlab/ci/templates/Docker.gitlab-ci.yml
+release-image:
+  stage: Release
+  image: docker:20.10.22
+  services:
+    - docker:20.10.22-dind
+  before_script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" $CI_REGISTRY
+  script:
+    - docker build --pull -t "$CI_REGISTRY_IMAGE/$CI_COMMIT_BRANCH:$CI_COMMIT_SHA" .
+    - docker push "$CI_REGISTRY_IMAGE/$CI_COMMIT_BRANCH:$CI_COMMIT_SHA"
+
+publish:
+  stage: Deploy
+  image: docker:24.0.2
+  services:
+    - docker:24.0.2-dind
+  variables:
+    APP_NAME: notification
+  before_script:
+    - apk add --no-cache curl jq python3 py3-pip
+    - pip install awscli
+  script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker pull $CI_REGISTRY_IMAGE/$CI_COMMIT_BRANCH:$CI_COMMIT_SHA
+    - docker tag "$CI_REGISTRY_IMAGE/$CI_COMMIT_BRANCH:$CI_COMMIT_SHA" "$CI_AWS_ECR_URI/$APP_NAME:latest"
+    - echo $CI_AWS_ECR_URI
+    - echo "$CI_AWS_ECR_URI/$APP_NAME:latest"
+    - aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin $CI_AWS_ECR_URI
+    - docker push "$CI_AWS_ECR_URI/$APP_NAME:latest"
